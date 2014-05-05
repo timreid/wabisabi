@@ -2,7 +2,6 @@ package wabisabi
 
 import "math"
 import "math/rand"
-import "fmt"
 import "sort"
 
 type State map[string]interface{}
@@ -46,38 +45,27 @@ type Operator struct {
 	Op func(Fitness, Selection, Population) Population
 }
 
+type Operators []Operator
+
 type Monitor func(State, Population) (State, bool)
 
-func SimpleMonitor(state State, population Population) (newState State, done bool) {
-	generation := state["generation"].(int)
-	max := state["maxFitness"].(float64)
-	goal := state["goalFitness"].(float64)
-	sum := 0.0
-	for _, c := range population {
-		//min, max, mean, std dev
-		cs := c.Score
-
-		if cs > max {
-			max = cs
+//simple exponential selection with las vegas resampling
+func MakeSelection(scale float64) Selection {
+	selection := func(population Population) (selected Individual) {
+		k := len(population)
+		sigma := scale * float64(k)
+		f := func() (i int) { i = int(math.Floor(math.Abs(rand.NormFloat64() * sigma))); return }
+		sample := 0
+		//las vegas resampling
+		for sample = f(); sample >= k; sample = f() {
 		}
-		if !math.IsNaN(cs) {
-			sum = sum + cs
-		}
+		selected = population[sample]
+		return
 	}
-	newState = state
-	mean := sum / float64(len(population))
-	newState["generation"] = generation + 1
-	newState["maxFitness"] = max
-	newState["meanFitness"] = mean
-	fmt.Printf("%4d\t%4.3f\t%4.3f", generation, max, mean)
-	fmt.Println()
-	if max >= goal {
-		done = true
-	}
-	return
+	return selection
 }
 
-func Evolve(fitness Fitness, selection Selection, monitor Monitor, operators []Operator, initialPopulation Population, initialState State) (State, Population) {
+func Evolve(fitness Fitness, selection Selection, monitor Monitor, operators Operators, initialPopulation Population, initialState State) (State, Population) {
 
 	state := initialState
 	state["generation"] = 0
@@ -97,26 +85,30 @@ func Evolve(fitness Fitness, selection Selection, monitor Monitor, operators []O
 
 	propagate := func(state State, population Population) Population {
 		populationSize := state["populationSize"].(int)
-		eliteGroupSize := state["eliteGroupSize"].(int)
+		//ugly corner case: elite group can be bigger than the population
+		eliteGroupSize := int(math.Min(float64(state["eliteGroupSize"].(int)), float64(len(population))))
+
+		//how many children do we have to create
 		k := populationSize - eliteGroupSize
-		newPopulation := *new(Population)
+
 		//create children until the newPopulation is full
+		newPopulation := *new(Population)
 		for j := 0; j < k; {
 			//select operator
 			chosenOperator := operatorSelection(operators)
 			//create some variable number of children
 			children := chosenOperator.Op(fitness, selection, population)
 			nChildren := len(children)
-			//fmt.Println("children: ", children)
 			newPopulation = append(newPopulation, children...)
-			j += nChildren
+			j = j + nChildren
 		}
 		//copy elite into pop
-		newPopulation = append(newPopulation[0:k], population[0:eliteGroupSize]...)
+		newPopulation = append(newPopulation, population[0:eliteGroupSize]...)
 		sort.Sort(newPopulation)
 		return newPopulation
 	}
 
+	//main loop repeats until monitor tells us to stop
 	for !done {
 		population = propagate(state, population)
 		state, done = monitor(state, population)
