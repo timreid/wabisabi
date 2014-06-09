@@ -3,17 +3,22 @@ package wabisabi
 import "math"
 import "math/rand"
 import "sort"
+import "fmt"
 
-type State map[string]interface{}
+//used to hold metadeta for individuals and the state of the simulation
+type Meta map[string]interface{}
 
+//an abstract representation of the genome of an individual
 type Genotype interface{}
 
+//an individual
 type Individual struct {
-	Score  float64
-	State  State
 	Genome Genotype
+	Score  float64
+	Meta   Meta
 }
 
+//populations can be sorted by score
 type Population []Individual
 
 func (p Population) Len() int {
@@ -21,14 +26,9 @@ func (p Population) Len() int {
 }
 
 func (p Population) Less(i, j int) (x bool) {
-	tempIndI := p[i]
-	tempIndJ := p[j]
-	if tempIndI.Score < tempIndJ.Score || math.IsNaN(tempIndI.Score) {
-		x = false
-	} else {
-		x = true
-	}
-	return x
+	A := p[i]
+	B := p[j]
+	return A.Score > B.Score
 }
 
 func (p Population) Swap(i, j int) {
@@ -36,46 +36,32 @@ func (p Population) Swap(i, j int) {
 	return
 }
 
-type Fitness func(Genotype) (float64, State)
+//assigns a score and metadeta to a genotype
+type Fitness func(Genotype) (float64, Meta)
 
+//selects an individual from the population for reproduction
 type Selection func(Population) Individual
 
+//an evolutionary operator with associated propability of selection for use in reproduction
 type Operator struct {
-	P  func(State) float64
+	//P  func(Meta) float64
+	P  float64
 	Op func(Fitness, Selection, Population) Population
 }
 
 type Operators []Operator
 
-type Monitor func(State, Population) (State, bool)
+//responsible for logging and ending the experiment
+type Monitor func(Meta, Population) (Meta, bool)
 
-//simple exponential selection with las vegas resampling
-func MakeSelection(scale float64) Selection {
-	selection := func(population Population) (selected Individual) {
-		k := len(population)
-		sigma := scale * float64(k)
-		f := func() (i int) { i = int(math.Floor(math.Abs(rand.NormFloat64() * sigma))); return }
-		sample := 0
-		//las vegas resampling
-		for sample = f(); sample >= k; sample = f() {
-		}
-		selected = population[sample]
-		return
-	}
-	return selection
-}
-
-func Evolve(fitness Fitness, selection Selection, monitor Monitor, operators Operators, initialPopulation Population, initialState State) (State, Population) {
+func Evolve(fitness Fitness, selection Selection, monitor Monitor, operators Operators, initialPopulation Population, initialState Meta) (Meta, Population) {
 
 	state := initialState
-	state["generation"] = 0
-	population := initialPopulation
-	done := false
 
 	operatorSelection := func(operators []Operator) Operator {
 		i := 0
 		x := rand.Float64()
-		for P := operators[i].P(state); x > P; P = operators[i].P(state) {
+		for P := operators[i].P; x > P; P = operators[i].P {
 			x = x - P
 			i++
 		}
@@ -83,16 +69,16 @@ func Evolve(fitness Fitness, selection Selection, monitor Monitor, operators Ope
 
 	}
 
-	propagate := func(state State, population Population) Population {
+	propagate := func(state Meta, population Population) Population {
 		populationSize := state["populationSize"].(int)
-		//ugly corner case: elite group can be bigger than the population
+		//ugly corner case: elite group might be bigger than the population
 		eliteGroupSize := int(math.Min(float64(state["eliteGroupSize"].(int)), float64(len(population))))
 
 		//how many children do we have to create
 		k := populationSize - eliteGroupSize
 
 		//create children until the newPopulation is full
-		newPopulation := *new(Population)
+		newPopulation := Population{}
 		for j := 0; j < k; {
 			//select operator
 			chosenOperator := operatorSelection(operators)
@@ -103,12 +89,19 @@ func Evolve(fitness Fitness, selection Selection, monitor Monitor, operators Ope
 			j = j + nChildren
 		}
 		//copy elite into pop
-		newPopulation = append(newPopulation, population[0:eliteGroupSize]...)
+		elites := population[0:eliteGroupSize]
+		newPopulation = append(newPopulation, elites...)
 		sort.Sort(newPopulation)
 		return newPopulation
 	}
 
+	state["generation"] = 0
+	population := initialPopulation
+	done := false
+	fmt.Println("simulation starting")
+
 	//main loop repeats until monitor tells us to stop
+	monitor(state, population)
 	for !done {
 		population = propagate(state, population)
 		state, done = monitor(state, population)
